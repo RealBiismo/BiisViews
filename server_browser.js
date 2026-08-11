@@ -94,7 +94,6 @@ async function resolveChannel(yt,input){
 
 function parseAbout(about){
   if(!about)return {};
-  // Newer YouTube About popup: AboutChannel -> metadata: AboutChannelView.
   const m=about.metadata||about;
   const viewText=text(m.view_count);
   const subText=text(m.subscriber_count);
@@ -139,8 +138,6 @@ async function getLive(channel){
     if(!channel.has_live_streams)return null;
     const feed=await channel.getLiveStreams();
     const nodes=Array.from(feed.videos||[]).slice(0,20);
-    // The streams tab exposes live badges/view counts without needing getBasicInfo(),
-    // which currently triggers a YouTube.js parser warning on some videos.
     for(const node of nodes){
       const parsed=parseVideoNode(node);
       const rawStrings=[text(node?.view_count),text(node?.short_view_count),text(node?.published),text(node?.badges),text(findByKey(node,/view.*count/i))].filter(Boolean).join(' ');
@@ -182,6 +179,7 @@ async function buildChannel(query){
   const recentViewsTotal=views.length?views.reduce((a,b)=>a+b,0):null;
   const topRecentVideo=views.length?[...recentVideos].filter(v=>Number.isFinite(v.views)).sort((a,b)=>b.views-a.views)[0]:null;
   const subscribers=about.subscribers??hs.subscribers;
+  const fallbackVideoCount=recentVideos.length||null;
   const result={
     platform:'YouTube',
     channelId,
@@ -196,7 +194,7 @@ async function buildChannel(query){
     hiddenSubscribers:subscribers==null,
     totalViews:about.totalViews??null,
     totalViewsText:about.totalViewsText||null,
-    videoCount:about.videoCount??hs.videoCount??recentVideos.length||null,
+    videoCount:(about.videoCount??hs.videoCount??fallbackVideoCount),
     videoCountText:about.videoCountText||hs.videoCountText||null,
     country:about.country??null,
     createdAt:about.createdAt??null,
@@ -235,6 +233,5 @@ function serveStatic(res,pathname){let relative=pathname==='/'?'/index.html':pat
 const server=http.createServer(async(req,res)=>{const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);if(url.pathname==='/api/channel')return handleApi(req,res,url);serveStatic(res,decodeURIComponent(url.pathname));});
 server.listen(PORT,'0.0.0.0',()=>{
   console.log(`BiisViews YouTube.js server running on http://localhost:${PORT}`);
-  // One generic startup health check; it validates the mapping without affecting what users search for.
   setTimeout(()=>buildChannel('@YouTube').then(c=>console.log('[BiisViews] startup self-test OK:',JSON.stringify({pfp:!!c.profilePicture,subs:c.subscribers,views:c.totalViews,videos:c.videoCount}))).catch(e=>console.log('[BiisViews] startup self-test failed:',e.message)),1500);
 });
