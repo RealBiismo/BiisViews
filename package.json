@@ -1,8 +1,8 @@
 {
   "name": "biisviews",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
-  "description": "BiisViews - YouTube channel and live stream lookup using the YouTube Data API v3.",
+  "description": "BiisViews - keyless YouTube channel and live stream lookup from public YouTube pages.",
   "scripts": {
     "start": "node server_browser.js",
     "dev": "node --watch server_browser.js"
