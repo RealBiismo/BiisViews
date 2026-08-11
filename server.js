@@ -31,7 +31,7 @@ function normalizeChannel(input,requestedSlug){
     slug:first(raw?.slug,user?.slug,requestedSlug),
     username:first(user?.username,raw?.username,raw?.name,user?.name,requestedSlug),
     displayName:first(user?.display_name,raw?.display_name,user?.username,raw?.username,requestedSlug),
-    channelId:first(raw?.id,raw?.channel_id,livestream?.channel_id),
+    channelId:first(raw?.channel_id,raw?.id,livestream?.channel_id),
     userId:first(raw?.user_id,user?.id),
     chatroomId:first(raw?.chatroom?.id,raw?.chatroom_id),
     profilePicture:profilePicture||null,
@@ -50,10 +50,10 @@ function normalizeChannel(input,requestedSlug){
     categoryId:first(categoryObj?.id,livestream?.category_id,raw?.category_id,raw?.category?.id)||null,
     language:first(livestream?.language,raw?.language,user?.language)||null,
     startedAt:first(livestream?.created_at,livestream?.started_at,livestream?.start_time,raw?.created_at,raw?.started_at,raw?.start_time)||null,
-    streamId:first(livestream?.id,raw?.livestream_id,raw?.id)||null,
+    streamId:first(livestream?.id,raw?.livestream_id,raw?.stream_id)||null,
     thumbnail:thumbnail||null,
     playbackUrl:first(raw?.playback_url,livestream?.playback_url)||null,
-    createdAt:first(raw?.created_at,user?.created_at)||null,
+    createdAt:first(raw?.channel_created_at,user?.created_at)||null,
     updatedAt:first(raw?.updated_at,user?.updated_at)||null,
     url:`https://kick.com/${first(raw?.slug,user?.slug,requestedSlug)}`
   };
@@ -62,14 +62,20 @@ function normalizeChannel(input,requestedSlug){
 function normalizeLivestream(input,requestedSlug){
   const raw=unwrap(input);
   if(!raw || typeof raw!=='object' || Array.isArray(raw)) return null;
-  const categoryObj=first(raw?.categories?.[0],raw?.category)||{};
+  const channel=raw?.channel||{};
+  const user=raw?.user||channel?.user||{};
+  const categoryObj=first(raw?.categories?.[0],raw?.category,channel?.category)||{};
+  const objectSlug=cleanSlug(first(raw?.slug,channel?.slug,user?.username,user?.slug,''));
   const hasLiveShape=first(raw?.id,raw?.livestream_id,raw?.viewer_count,raw?.viewers,raw?.session_title,raw?.started_at,raw?.created_at) !== undefined;
   if(!hasLiveShape) return null;
   const explicit=first(raw?.is_live,raw?.live);
   return {
-    slug:requestedSlug,
-    username:requestedSlug,
-    displayName:requestedSlug,
+    slug:first(channel?.slug,raw?.channel_slug,objectSlug,requestedSlug),
+    username:first(user?.username,channel?.username,raw?.username,requestedSlug),
+    displayName:first(user?.display_name,user?.username,channel?.username,requestedSlug),
+    profilePicture:first(user?.profile_pic,user?.profile_picture,user?.avatar,user?.avatar_url,channel?.profile_pic,channel?.profile_picture)||null,
+    bio:first(user?.bio,channel?.bio)||null,
+    verified:Boolean(first(user?.is_verified,channel?.verified,false)),
     isLive: explicit !== undefined ? Boolean(explicit) : true,
     viewers:first(raw?.viewer_count,raw?.viewers)??null,
     title:first(raw?.session_title,raw?.title)??null,
@@ -77,11 +83,11 @@ function normalizeLivestream(input,requestedSlug){
     categoryId:first(categoryObj?.id,raw?.category_id)??null,
     language:first(raw?.language)??null,
     startedAt:first(raw?.created_at,raw?.started_at,raw?.start_time)??null,
-    streamId:first(raw?.id,raw?.livestream_id)??null,
-    channelId:first(raw?.channel_id)??null,
-    thumbnail:first(raw?.thumbnail?.url,raw?.thumbnail)??null,
-    playbackUrl:first(raw?.playback_url)??null,
-    url:`https://kick.com/${requestedSlug}`
+    streamId:first(raw?.id,raw?.livestream_id,raw?.stream_id)??null,
+    channelId:first(raw?.channel_id,channel?.id)??null,
+    thumbnail:first(raw?.thumbnail?.url,raw?.thumbnail,channel?.thumbnail?.url,channel?.thumbnail)??null,
+    playbackUrl:first(raw?.playback_url,channel?.playback_url)??null,
+    url:`https://kick.com/${first(channel?.slug,objectSlug,requestedSlug)}`
   };
 }
 
@@ -100,18 +106,39 @@ function scoreChannel(c){
   return keys.reduce((n,k)=>n+(c?.[k]!==undefined&&c?.[k]!==null&&c?.[k]!==''?1:0),0)+(c?.isLive?3:0);
 }
 
-function curlProbe(endpoint,slug){return new Promise(resolve=>{const args=['-sS','-L','--compressed','--max-time','12','-H','Accept: application/json, text/plain, */*','-H','Accept-Language: en-GB,en;q=0.9','-H',`Referer: https://kick.com/${encodeURIComponent(slug)}`,'-H','Origin: https://kick.com','-H','User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36','-w','\n__BIISVIEWS_STATUS__:%{http_code}',endpoint];execFile('curl',args,{timeout:15000,maxBuffer:5*1024*1024},(error,stdout='',stderr='')=>{const marker='\n__BIISVIEWS_STATUS__:';const idx=stdout.lastIndexOf(marker);const body=idx>=0?stdout.slice(0,idx):stdout;const status=idx>=0?Number(stdout.slice(idx+marker.length).trim()):0;let json=null;try{json=JSON.parse(body);}catch{}resolve({endpoint,status,ok:status>=200&&status<300,json,bodyPreview:json?undefined:body.slice(0,700),transport:'curl',transportError:error&&!stdout?(stderr||error.message):undefined});});});}
+function findMatchingObjects(node,slug,results=[],seen=new Set(),depth=0){
+  if(node===null||node===undefined||depth>12) return results;
+  if(typeof node!=='object') return results;
+  if(seen.has(node)) return results;
+  seen.add(node);
+  if(Array.isArray(node)){
+    for(const item of node) findMatchingObjects(item,slug,results,seen,depth+1);
+    return results;
+  }
+  const candidates=[node.slug,node.username,node?.channel?.slug,node?.channel?.username,node?.user?.username,node?.user?.slug,node?.broadcaster?.username];
+  if(candidates.some(v=>cleanSlug(v)===slug)) results.push(node);
+  for(const value of Object.values(node)) findMatchingObjects(value,slug,results,seen,depth+1);
+  return results;
+}
+
+function curlProbe(endpoint,slug){return new Promise(resolve=>{const args=['-sS','-L','--compressed','--max-time','12','-H','Accept: application/json, text/plain, */*','-H','Accept-Language: en-GB,en;q=0.9','-H',`Referer: https://kick.com/${encodeURIComponent(slug)}`,'-H','Origin: https://kick.com','-H','User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36','-w','\n__BIISVIEWS_STATUS__:%{http_code}',endpoint];execFile('curl',args,{timeout:15000,maxBuffer:12*1024*1024},(error,stdout='',stderr='')=>{const marker='\n__BIISVIEWS_STATUS__:';const idx=stdout.lastIndexOf(marker);const body=idx>=0?stdout.slice(0,idx):stdout;const status=idx>=0?Number(stdout.slice(idx+marker.length).trim()):0;let json=null;try{json=JSON.parse(body);}catch{}resolve({endpoint,status,ok:status>=200&&status<300,json,bodyPreview:json?undefined:body.slice(0,700),transport:'curl',transportError:error&&!stdout?(stderr||error.message):undefined});});});}
 
 async function probeAll(slug){
   const channelEndpoints=[
     `https://api.kick.com/private/v1/channels/${encodeURIComponent(slug)}`,
     `https://kick.com/api/v2/channels/${encodeURIComponent(slug)}`,
-    `https://kick.com/api/v1/channels/${encodeURIComponent(slug)}`
+    `https://kick.com/api/v1/channels/${encodeURIComponent(slug)}`,
+    `https://kick.com/api/v1/users/${encodeURIComponent(slug)}`
   ];
   const livestreamEndpoints=[
     `https://kick.com/api/v2/channels/${encodeURIComponent(slug)}/livestream`,
     `https://kick.com/api/v1/channels/${encodeURIComponent(slug)}/livestream`,
     `https://kick.com/api/v1/live-channels/${encodeURIComponent(slug)}/search`
+  ];
+  const activeFeedEndpoints=[
+    `https://api.kick.com/private/v1/livestreams?slug=${encodeURIComponent(slug)}`,
+    `https://api.kick.com/private/v1/livestreams?channel=${encodeURIComponent(slug)}`,
+    `https://api.kick.com/private/v1/livestreams`
   ];
   const diagnostics=[];
   const successful=[];
@@ -139,21 +166,39 @@ async function probeAll(slug){
     }
   }
 
+  for(const endpoint of activeFeedEndpoints){
+    const probe=await curlProbe(endpoint,slug);
+    diagnostics.push(probe);
+    if(probe.ok&&probe.json&&typeof probe.json==='object'){
+      const matches=findMatchingObjects(probe.json,slug);
+      for(const match of matches){
+        const normalized=normalizeLivestream(match,slug)||normalizeChannel(match,slug);
+        if(normalized){
+          normalized.isLive=true;
+          successful.push({endpoint,raw:match,channel:normalized,score:scoreChannel(normalized)+10,type:'active-feed'});
+          merged=mergeChannel(merged||{},normalized);
+        }
+      }
+    }
+  }
+
   if(!merged) return {ok:false,diagnostics};
 
   const channelId=merged.channelId;
   if(channelId){
     for(const endpoint of [
       `https://api.kick.com/channels/${channelId}/followers-count`,
-      `https://api.kick.com/private/v0/channels/${channelId}/viewer-count`
+      `https://api.kick.com/private/v0/channels/${channelId}/viewer-count`,
+      `https://kick.com/api/v1/current-viewers?ids[]=${channelId}`
     ]){
       const p=await curlProbe(endpoint,slug);
       diagnostics.push(p);
       if(p.ok&&p.json){
         const d=unwrap(p.json)||p.json;
         if(endpoint.includes('followers-count')) merged.followers=first(d?.followers_count,d?.count,d?.followers,merged.followers);
-        if(endpoint.includes('viewer-count')){
-          merged.viewers=first(d?.viewer_count,d?.count,d?.viewers,merged.viewers);
+        if(endpoint.includes('viewer-count')||endpoint.includes('current-viewers')){
+          const viewerCandidate=first(d?.viewer_count,d?.count,d?.viewers,p.json?.[channelId],p.json?.data?.[channelId]);
+          merged.viewers=first(viewerCandidate,merged.viewers);
           const explicitLive=first(d?.is_live,d?.live);
           if(explicitLive!==undefined) merged.isLive=Boolean(explicitLive);
           else if(Number(merged.viewers)>0) merged.isLive=true;
@@ -172,7 +217,7 @@ async function handleApi(req,res,url){
   const slug=cleanSlug(url.searchParams.get('slug'));
   if(!slug||!/^[a-z0-9_.-]{1,80}$/i.test(slug))return sendJson(res,400,{error:'Enter a valid Kick username or channel URL.'});
   const result=await probeAll(slug);
-  if(result.ok)return sendJson(res,200,{ok:true,source:'kick-channel-plus-livestream-probe',endpoint:result.endpoint,transport:'curl',fetchedAt:new Date().toISOString(),channel:result.channel,raw:result.rawResponses,diagnostics:result.diagnostics});
+  if(result.ok)return sendJson(res,200,{ok:true,source:'kick-multi-source-probe',endpoint:result.endpoint,transport:'curl',fetchedAt:new Date().toISOString(),channel:result.channel,raw:result.rawResponses,diagnostics:result.diagnostics});
   return sendJson(res,502,{ok:false,error:'No tested Kick endpoint returned usable channel JSON.',diagnostics:result.diagnostics});
 }
 
