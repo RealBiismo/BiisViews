@@ -5,137 +5,132 @@ const { URL } = require('url');
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
 const MIME = { '.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'application/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp' };
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 function sendJson(res,status,payload){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(payload));}
 function first(...v){return v.find(x=>x!==undefined&&x!==null&&x!=='');}
-function cleanInput(value){return String(value||'').trim();}
-function bestThumb(t){return t?.maxres?.url||t?.standard?.url||t?.high?.url||t?.medium?.url||t?.default?.url||null;}
+function cleanInput(v){return String(v||'').trim();}
+function numberFromText(v){if(v===undefined||v===null)return null;const s=String(v).replace(/[^0-9.]/g,'');if(!s)return null;if(/[kKmMbB]/.test(String(v))){const n=parseFloat(s);const t=String(v).toLowerCase();return Math.round(n*(t.includes('b')?1e9:t.includes('m')?1e6:1e3));}return Number(s.replace(/\./g,''))||Number(s)||null;}
+function textOf(v){if(!v)return null;if(typeof v==='string')return v;if(v.simpleText)return v.simpleText;if(Array.isArray(v.runs))return v.runs.map(x=>x.text||'').join('');return null;}
+function bestThumb(t){if(!t)return null;if(typeof t==='string')return t;const arr=Array.isArray(t)?t:(t.thumbnails||[]);return arr.length?arr[arr.length-1]?.url||null:null;}
 
-async function yt(endpoint, params={}){
-  const u = new URL(`https://www.googleapis.com/youtube/v3/${endpoint}`);
-  for(const [k,v] of Object.entries(params)) if(v!==undefined&&v!==null&&v!=='') u.searchParams.set(k,String(v));
-  u.searchParams.set('key',YOUTUBE_API_KEY);
-  const r = await fetch(u,{headers:{Accept:'application/json'}});
-  const text = await r.text();
-  let data=null; try{data=JSON.parse(text);}catch{}
-  if(!r.ok){const message=data?.error?.message||`YouTube returned HTTP ${r.status}`;const e=new Error(message);e.status=r.status;e.details=data||text.slice(0,500);throw e;}
-  return data;
+async function fetchPage(url){
+  const r=await fetch(url,{redirect:'follow',headers:{'User-Agent':UA,'Accept-Language':'en-GB,en;q=0.9','Accept':'text/html,application/xhtml+xml'}});
+  const text=await r.text();
+  if(!r.ok){const e=new Error(`YouTube returned HTTP ${r.status}`);e.status=r.status;e.details=text.slice(0,300);throw e;}
+  return {url:r.url,html:text,status:r.status};
 }
 
-function parseIdentifier(value){
+function decodeHtml(s){return String(s||'').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');}
+function meta(html,property){
+  const p=property.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const patterns=[new RegExp(`<meta[^>]+(?:property|name)=["']${p}["'][^>]+content=["']([^"']*)["']`,'i'),new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${p}["']`,'i')];
+  for(const re of patterns){const m=html.match(re);if(m)return decodeHtml(m[1]);}return null;
+}
+function canonical(html){const m=html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)/i)||html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i);return m?.[1]||null;}
+
+function extractJson(html,markers){
+  for(const marker of markers){
+    const idx=html.indexOf(marker); if(idx<0) continue;
+    let start=html.indexOf('{',idx+marker.length); if(start<0) continue;
+    let depth=0,inStr=false,esc=false;
+    for(let i=start;i<html.length;i++){
+      const ch=html[i];
+      if(inStr){if(esc)esc=false;else if(ch==='\\')esc=true;else if(ch==='"')inStr=false;continue;}
+      if(ch==='"'){inStr=true;continue;}
+      if(ch==='{')depth++; else if(ch==='}'){depth--;if(depth===0){try{return JSON.parse(html.slice(start,i+1));}catch{break;}}}
+    }
+  }
+  return null;
+}
+
+function walk(node,fn,depth=0){if(node===null||node===undefined||depth>18)return null;if(fn(node))return node;if(Array.isArray(node)){for(const v of node){const x=walk(v,fn,depth+1);if(x)return x;}}else if(typeof node==='object'){for(const v of Object.values(node)){const x=walk(v,fn,depth+1);if(x)return x;}}return null;}
+function findKey(node,key){let value;walk(node,n=>{if(n&&typeof n==='object'&&!Array.isArray(n)&&Object.prototype.hasOwnProperty.call(n,key)){value=n[key];return true;}return false;});return value;}
+function findTextMatching(node,re){let out=null;walk(node,n=>{if(n&&typeof n==='object'){const t=textOf(n);if(t&&re.test(t)){out=t;return true;}}return false;});return out;}
+
+function parseInput(value){
   const raw=cleanInput(value);
   try{
     const u=new URL(raw.match(/^https?:\/\//i)?raw:`https://${raw}`);
-    if(/(^|\.)youtube\.com$/i.test(u.hostname)||/(^|\.)youtu\.be$/i.test(u.hostname)){
+    if(/(^|\.)youtube\.com$/i.test(u.hostname)){
       const parts=u.pathname.split('/').filter(Boolean);
-      if(parts[0]==='channel'&&parts[1]) return {type:'id',value:parts[1]};
-      if(parts[0]?.startsWith('@')) return {type:'handle',value:parts[0]};
-      if(parts[0]==='user'&&parts[1]) return {type:'username',value:parts[1]};
-      if(parts[0]==='c'&&parts[1]) return {type:'query',value:parts[1]};
+      if(parts[0]==='channel'&&parts[1])return {path:`/channel/${parts[1]}`,label:parts[1]};
+      if(parts[0]?.startsWith('@'))return {path:`/${parts[0]}`,label:parts[0]};
+      if(parts[0]==='c'&&parts[1])return {path:`/@${parts[1]}`,label:parts[1]};
+      if(parts[0]==='user'&&parts[1])return {path:`/user/${parts[1]}`,label:parts[1]};
     }
   }catch{}
-  if(/^UC[A-Za-z0-9_-]{20,}$/.test(raw)) return {type:'id',value:raw};
-  if(raw.startsWith('@')) return {type:'handle',value:raw};
-  return {type:'handle-or-query',value:raw};
+  if(/^UC[A-Za-z0-9_-]{20,}$/.test(raw))return {path:`/channel/${raw}`,label:raw};
+  const h=raw.replace(/^@/,'').replace(/\s+/g,'');
+  return {path:`/@${encodeURIComponent(h)}`,label:`@${h}`};
 }
 
-async function getChannelBy(filterKey,filterValue){
-  const data=await yt('channels',{part:'snippet,statistics,brandingSettings,status', [filterKey]:filterValue, maxResults:1});
-  return data.items?.[0]||null;
-}
-
-async function resolveChannel(input){
-  const id=parseIdentifier(input);
-  if(id.type==='id') return getChannelBy('id',id.value);
-  if(id.type==='username') return getChannelBy('forUsername',id.value);
-  if(id.type==='handle') return getChannelBy('forHandle',id.value);
-  if(id.type==='handle-or-query'){
-    const direct=await getChannelBy('forHandle',id.value).catch(()=>null);
-    if(direct) return direct;
-  }
-  const q=id.value;
-  const search=await yt('search',{part:'snippet',type:'channel',q,maxResults:1});
-  const channelId=search.items?.[0]?.snippet?.channelId||search.items?.[0]?.id?.channelId;
-  if(!channelId) return null;
-  return getChannelBy('id',channelId);
-}
-
-async function getLiveVideo(channelId){
-  const search=await yt('search',{part:'snippet',channelId,eventType:'live',type:'video',maxResults:5,order:'date'});
-  const videoId=search.items?.[0]?.id?.videoId;
-  if(!videoId) return null;
-  const videos=await yt('videos',{part:'snippet,liveStreamingDetails,statistics,status',id:videoId});
-  return videos.items?.[0]||null;
-}
-
-async function getCategory(categoryId){
-  if(!categoryId) return null;
-  const data=await yt('videoCategories',{part:'snippet',id:categoryId});
-  return data.items?.[0]?.snippet?.title||null;
-}
-
-function normalizeChannel(channel,live,category){
-  const s=channel.snippet||{};
-  const stats=channel.statistics||{};
-  const branding=channel.brandingSettings?.channel||{};
-  const ls=live?.snippet||{};
-  const ld=live?.liveStreamingDetails||{};
-  const vs=live?.statistics||{};
-  const custom=first(s.customUrl,branding.unsubscribedTrailer);
-  const handle=s.customUrl||null;
+function parseChannelPage(page,input){
+  const html=page.html;
+  const data=extractJson(html,['var ytInitialData = ','ytInitialData = ','"ytInitialData":']);
+  const ogTitle=meta(html,'og:title');
+  const ogImage=meta(html,'og:image');
+  const description=meta(html,'description')||meta(html,'og:description');
+  const canon=canonical(html)||page.url;
+  const channelId=first(
+    html.match(/"channelId":"(UC[A-Za-z0-9_-]+)"/)?.[1],
+    html.match(/"externalId":"(UC[A-Za-z0-9_-]+)"/)?.[1],
+    html.match(/youtube\.com\/channel\/(UC[A-Za-z0-9_-]+)/)?.[1]
+  );
+  const subscriberText=first(findTextMatching(data,/subscriber/i),html.match(/"subscriberCountText":\{"simpleText":"([^"]+)"/)?.[1]);
+  const videoCountText=first(findTextMatching(data,/\bvideos?\b/i),html.match(/"videosCountText":\{[^}]*"simpleText":"([^"]+)"/)?.[1]);
+  const handle=first(html.match(/"vanityChannelUrl":"https:\/\/www\.youtube\.com\/(@[^"]+)"/)?.[1],html.match(/"canonicalBaseUrl":"\/@([^"]+)"/)?.[1]&&`@${html.match(/"canonicalBaseUrl":"\/@([^"]+)"/)?.[1]}`);
+  const avatar=first(ogImage,bestThumb(findKey(data,'avatar')));
+  const banner=bestThumb(findKey(data,'banner'));
   return {
-    platform:'YouTube',
-    channelId:channel.id,
-    username:first(handle,s.title,channel.id),
-    displayName:s.title||channel.id,
-    customUrl:s.customUrl||null,
-    profilePicture:bestThumb(s.thumbnails),
-    bio:s.description||null,
-    country:first(s.country,branding.country)||null,
-    createdAt:s.publishedAt||null,
-    subscribers:stats.hiddenSubscriberCount?null:stats.subscriberCount??null,
-    hiddenSubscribers:Boolean(stats.hiddenSubscriberCount),
-    totalViews:stats.viewCount??null,
-    videoCount:stats.videoCount??null,
-    isLive:Boolean(live),
-    viewers:ld.concurrentViewers??null,
-    title:ls.title||null,
-    category:category||null,
-    categoryId:ls.categoryId||null,
-    language:first(ls.defaultAudioLanguage,ls.defaultLanguage,s.defaultLanguage)||null,
-    startedAt:first(ld.actualStartTime,ld.scheduledStartTime)||null,
-    scheduledStartAt:ld.scheduledStartTime||null,
-    streamId:live?.id||null,
-    thumbnail:bestThumb(ls.thumbnails),
-    liveLikes:vs.likeCount??null,
-    liveComments:vs.commentCount??null,
-    privacyStatus:channel.status?.privacyStatus||null,
-    madeForKids:first(channel.status?.madeForKids,channel.status?.selfDeclaredMadeForKids),
-    url:`https://www.youtube.com/channel/${channel.id}`,
-    liveUrl:live?.id?`https://www.youtube.com/watch?v=${live.id}`:null
+    platform:'YouTube', channelId:channelId||null, username:handle||input, displayName:ogTitle||input, customUrl:handle||null,
+    profilePicture:avatar||null,banner:banner||null,bio:description||null,
+    subscribers:numberFromText(subscriberText),hiddenSubscribers:!subscriberText,totalViews:null,videoCount:numberFromText(videoCountText),
+    country:null,createdAt:null,privacyStatus:'public',url:canon
   };
 }
 
+function parseAboutPage(page,channel){
+  const html=page.html;const data=extractJson(html,['var ytInitialData = ','ytInitialData = ','"ytInitialData":']);
+  const viewsText=first(findTextMatching(data,/views/i),html.match(/([0-9,.]+) views/)?.[0]);
+  const joinedText=first(findTextMatching(data,/joined/i),html.match(/Joined [A-Za-z]+ \d{1,2}, \d{4}/)?.[0]);
+  const countryText=findTextMatching(data,/^[A-Za-z][A-Za-z .'-]{2,40}$/);
+  return {...channel,totalViews:first(channel.totalViews,numberFromText(viewsText)),createdAt:first(channel.createdAt,joinedText?.replace(/^Joined\s+/i,'')),country:first(channel.country,countryText)};
+}
+
+function parseLivePage(page,channel){
+  const html=page.html;
+  const player=extractJson(html,['var ytInitialPlayerResponse = ','ytInitialPlayerResponse = ','"ytInitialPlayerResponse":']);
+  const data=extractJson(html,['var ytInitialData = ','ytInitialData = ','"ytInitialData":']);
+  const vd=player?.videoDetails||{};
+  const micro=player?.microformat?.playerMicroformatRenderer||{};
+  const isLive=Boolean(vd.isLiveContent || micro.liveBroadcastDetails?.isLiveNow || /"style":"LIVE"/.test(html) || /\bwatching\b/i.test(html));
+  if(!isLive)return {...channel,isLive:false,viewers:null,title:null,category:null,categoryId:null,language:null,startedAt:null,streamId:null,thumbnail:null,liveLikes:null,liveUrl:null};
+  const watching=first(findTextMatching(data,/watching/i),html.match(/([0-9,.]+) watching/i)?.[0]);
+  const likes=first(findTextMatching(data,/ likes?$/i),html.match(/"likeCount":"([0-9]+)"/)?.[1]);
+  const category=first(micro.category,findKey(data,'category'));
+  const videoId=first(vd.videoId,html.match(/"videoId":"([A-Za-z0-9_-]{11})"/)?.[1]);
+  const thumbs=vd.thumbnail?.thumbnails||micro.thumbnail?.thumbnails;
+  return {...channel,isLive:true,viewers:numberFromText(watching),title:first(vd.title,meta(html,'og:title')),category:typeof category==='string'?category:null,categoryId:null,language:first(vd.defaultAudioLanguage,micro.defaultAudioLanguage),startedAt:first(micro.liveBroadcastDetails?.startTimestamp,micro.publishDate),streamId:videoId||null,thumbnail:first(bestThumb(thumbs),meta(html,'og:image')),liveLikes:numberFromText(likes),liveUrl:videoId?`https://www.youtube.com/watch?v=${videoId}`:page.url};
+}
+
 async function handleApi(req,res,url){
-  if(req.method!=='GET') return sendJson(res,405,{error:'Method not allowed'});
-  if(!YOUTUBE_API_KEY) return sendJson(res,503,{ok:false,error:'BiisViews needs a YouTube Data API key. Set YOUTUBE_API_KEY in Render.'});
+  if(req.method!=='GET')return sendJson(res,405,{error:'Method not allowed'});
   const query=cleanInput(url.searchParams.get('channel')||url.searchParams.get('slug'));
-  if(!query) return sendJson(res,400,{error:'Enter a YouTube channel name, @handle, channel ID or URL.'});
+  if(!query)return sendJson(res,400,{error:'Enter a YouTube channel name, @handle, channel ID or URL.'});
   try{
-    const channel=await resolveChannel(query);
-    if(!channel) return sendJson(res,404,{ok:false,error:'YouTube channel not found.'});
-    const live=await getLiveVideo(channel.id);
-    const category=live?await getCategory(live.snippet?.categoryId).catch(()=>null):null;
-    const normalized=normalizeChannel(channel,live,category);
-    return sendJson(res,200,{ok:true,source:'youtube-data-api-v3',fetchedAt:new Date().toISOString(),channel:normalized,raw:{channel,liveVideo:live}});
-  }catch(error){
-    return sendJson(res,error.status&&error.status>=400&&error.status<600?error.status:502,{ok:false,error:error.message||'Unable to fetch YouTube channel.',details:error.details});
-  }
+    const parsed=parseInput(query);
+    const base=`https://www.youtube.com${parsed.path}`;
+    const channelPage=await fetchPage(base);
+    let channel=parseChannelPage(channelPage,parsed.label);
+    let about=null; try{about=await fetchPage(`${base}/about`);channel=parseAboutPage(about,channel);}catch{}
+    let livePage=null; try{livePage=await fetchPage(`${base}/live`);channel=parseLivePage(livePage,channel);}catch{channel={...channel,isLive:false};}
+    return sendJson(res,200,{ok:true,source:'youtube-public-pages-keyless',fetchedAt:new Date().toISOString(),channel,raw:{channelPage:{url:channelPage.url,status:channelPage.status},aboutPage:about?{url:about.url,status:about.status}:null,livePage:livePage?{url:livePage.url,status:livePage.status}:null}});
+  }catch(error){return sendJson(res,error.status||502,{ok:false,error:error.message||'Unable to fetch YouTube channel.',details:error.details});}
 }
 
 function serveStatic(res,pathname){let relative=pathname==='/'?'/index.html':pathname;let filePath=path.normalize(path.join(PUBLIC_DIR,relative));if(!filePath.startsWith(PUBLIC_DIR)){res.writeHead(403);return res.end('Forbidden');}fs.stat(filePath,(err,stat)=>{if(err||!stat.isFile())filePath=path.join(PUBLIC_DIR,'index.html');fs.readFile(filePath,(readErr,content)=>{if(readErr){res.writeHead(404);return res.end('Not found');}res.writeHead(200,{'Content-Type':MIME[path.extname(filePath)]||'application/octet-stream','Cache-Control':path.basename(filePath)==='index.html'?'no-cache':'public, max-age=3600'});res.end(content);});});}
 
 const server=http.createServer(async(req,res)=>{const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);if(url.pathname==='/api/channel')return handleApi(req,res,url);serveStatic(res,decodeURIComponent(url.pathname));});
-server.listen(PORT,'0.0.0.0',()=>console.log(`BiisViews YouTube server running on http://localhost:${PORT}`));
+server.listen(PORT,'0.0.0.0',()=>console.log(`BiisViews keyless YouTube server running on http://localhost:${PORT}`));
