@@ -4,8 +4,8 @@
   "private": true,
   "description": "BiisViews - public Kick channel information lookup using browser-backed public website requests.",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "node server_browser.js",
+    "dev": "node --watch server_browser.js"
   },
   "dependencies": {
     "puppeteer": "^24.16.0"
