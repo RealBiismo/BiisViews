@@ -4,6 +4,7 @@ const button = document.querySelector('#lookupButton');
 const statusEl = document.querySelector('#status');
 const result = document.querySelector('#result');
 
+const DEFAULT_CHANNEL = 'TYRIQUEHYDE';
 const ids = ['cover','liveBadge','avatar','username','displayName','verified','channelLink','bio','streamTitle','liveStatus','viewers','followers','category','following','subscriptions','language','vodEnabled','channelId','userId','chatroomId','streamId','categoryId','subscriptionEnabled','startedAt','createdAt','rawJson','diagnosticsJson'];
 const els = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
 
@@ -37,7 +38,7 @@ function showChannel(payload) {
   result.classList.remove('hidden');
 
   els.username.textContent = c.username || c.slug || 'Unknown channel';
-  els.displayName.textContent = c.displayName && c.displayName !== c.username ? c.displayName : '';
+  els.displayName.textContent = c.displayName && c.displayName.toLowerCase() !== String(c.username || '').toLowerCase() ? c.displayName : '';
   els.channelLink.textContent = c.url || '';
   els.channelLink.href = c.url || '#';
   els.bio.textContent = c.bio || 'No public bio returned.';
@@ -72,13 +73,13 @@ function showChannel(payload) {
     els.avatar.style.visibility = 'hidden';
   }
 
-  const coverImage = c.banner || c.thumbnail;
+  const coverImage = c.thumbnail || c.banner;
   els.cover.style.backgroundImage = coverImage ? `url("${String(coverImage).replace(/"/g, '%22')}")` : '';
 }
 
 async function lookup(value) {
   setLoading(true);
-  setStatus('Checking Kick endpoints…');
+  setStatus('Checking channel and livestream data…');
   result.classList.add('hidden');
 
   try {
@@ -90,7 +91,7 @@ async function lookup(value) {
       throw new Error(detail ? `${payload.error || 'Unable to fetch channel'} ${detail}` : (payload.error || 'Unable to fetch channel'));
     }
     showChannel(payload);
-    setStatus(`Fetched ${payload.channel.username || payload.channel.slug}.`);
+    setStatus(`${payload.channel.isLive ? 'LIVE · ' : ''}Fetched ${payload.channel.username || payload.channel.slug}.`);
     history.replaceState(null, '', `?channel=${encodeURIComponent(payload.channel.slug || value)}`);
   } catch (error) {
     setStatus(error.message, true);
@@ -105,8 +106,6 @@ form.addEventListener('submit', (event) => {
   if (value) lookup(value);
 });
 
-const initial = new URLSearchParams(location.search).get('channel');
-if (initial) {
-  input.value = initial;
-  lookup(initial);
-}
+const initial = new URLSearchParams(location.search).get('channel') || DEFAULT_CHANNEL;
+input.value = initial;
+lookup(initial);
