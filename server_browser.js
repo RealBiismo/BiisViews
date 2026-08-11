@@ -2,128 +2,140 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
-const puppeteer = require('puppeteer');
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
 const MIME = { '.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'application/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp' };
-let browserPromise = null;
 
 function sendJson(res,status,payload){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(payload));}
-function cleanSlug(v){return String(v||'').trim().replace(/^https?:\/\/(www\.)?kick\.com\//i,'').split(/[/?#]/)[0].replace(/^@/,'').toLowerCase();}
 function first(...v){return v.find(x=>x!==undefined&&x!==null&&x!=='');}
-function unwrap(raw){return raw?.data?.channel||raw?.data?.livestream||raw?.data?.stream||raw?.data||raw?.channel||raw?.livestream||raw?.stream||raw;}
+function cleanInput(value){return String(value||'').trim();}
+function bestThumb(t){return t?.maxres?.url||t?.standard?.url||t?.high?.url||t?.medium?.url||t?.default?.url||null;}
 
-function normalize(input,slug){
-  const raw=unwrap(input)||{};
-  const live=raw?.livestream||raw?.live_stream||raw?.stream||null;
-  const user=raw?.user||raw?.owner||{};
-  const cat=first(live?.categories?.[0],live?.category,raw?.category,raw?.recent_categories?.[0])||{};
-  const viewers=first(live?.viewer_count,live?.viewers,raw?.viewer_count,raw?.viewers);
-  const liveFlag=first(live?.is_live,raw?.is_live);
-  return {
-    slug:first(raw?.slug,user?.slug,slug),
-    username:first(user?.username,raw?.username,raw?.name,user?.name,slug),
-    displayName:first(user?.display_name,raw?.display_name,user?.username,raw?.username,slug),
-    channelId:first(raw?.channel_id,raw?.id,live?.channel_id),
-    userId:first(raw?.user_id,user?.id),
-    chatroomId:first(raw?.chatroom?.id,raw?.chatroom_id),
-    profilePicture:first(user?.profile_pic,user?.profile_picture,user?.avatar,user?.avatar_url,raw?.profile_pic,raw?.profile_picture,raw?.avatar,raw?.avatar_url)||null,
-    banner:first(raw?.banner_image?.url,raw?.banner_image,raw?.banner,raw?.cover_image?.url,raw?.cover_image,user?.banner_image?.url,user?.banner_image)||null,
-    bio:first(user?.bio,raw?.bio,raw?.description)||null,
-    verified:Boolean(first(user?.is_verified,raw?.verified,raw?.is_verified,false)),
-    followers:first(raw?.followers_count,raw?.followersCount,raw?.follower_count,raw?.followers,user?.followers_count)??null,
-    following:first(raw?.following_count,raw?.followingCount,user?.following_count)??null,
-    subscriptions:first(raw?.subscribers_count,raw?.subscriber_count,raw?.subscriptions_count,raw?.subscribers)??null,
-    subscriptionEnabled:Boolean(first(raw?.subscription_enabled,raw?.subscriptions_enabled,raw?.can_subscribe,false)),
-    vodEnabled:Boolean(first(raw?.vod_enabled,raw?.videos_enabled,false)),
-    isLive: liveFlag!==undefined ? Boolean(liveFlag) : Boolean(live && (viewers!==undefined||live?.id)),
-    viewers:viewers??null,
-    title:first(live?.session_title,live?.title,raw?.session_title,raw?.stream_title,raw?.title)||null,
-    category:first(cat?.name,cat?.title)||null,
-    categoryId:first(cat?.id,live?.category_id,raw?.category_id)||null,
-    language:first(live?.language,raw?.language,user?.language)||null,
-    startedAt:first(live?.created_at,live?.started_at,live?.start_time,raw?.started_at)||null,
-    streamId:first(live?.id,raw?.livestream_id,raw?.stream_id)||null,
-    thumbnail:first(live?.thumbnail?.url,live?.thumbnail,raw?.thumbnail?.url,raw?.thumbnail)||null,
-    playbackUrl:first(raw?.playback_url,live?.playback_url)||null,
-    createdAt:first(raw?.channel_created_at,user?.created_at)||null,
-    url:`https://kick.com/${first(raw?.slug,user?.slug,slug)}`
-  };
-}
-function merge(base,next){const out={...base};for(const [k,v] of Object.entries(next||{})){const empty=out[k]===undefined||out[k]===null||out[k]==='';if(empty&&v!==undefined&&v!==null&&v!=='')out[k]=v;if(['isLive','verified','subscriptionEnabled','vodEnabled'].includes(k)&&v===true)out[k]=true;}return out;}
-
-async function getBrowser(){
-  if(!browserPromise){
-    browserPromise=puppeteer.launch({headless:true,args:['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-zygote']}).catch(err=>{browserPromise=null;throw err;});
-  }
-  return browserPromise;
+async function yt(endpoint, params={}){
+  const u = new URL(`https://www.googleapis.com/youtube/v3/${endpoint}`);
+  for(const [k,v] of Object.entries(params)) if(v!==undefined&&v!==null&&v!=='') u.searchParams.set(k,String(v));
+  u.searchParams.set('key',YOUTUBE_API_KEY);
+  const r = await fetch(u,{headers:{Accept:'application/json'}});
+  const text = await r.text();
+  let data=null; try{data=JSON.parse(text);}catch{}
+  if(!r.ok){const message=data?.error?.message||`YouTube returned HTTP ${r.status}`;const e=new Error(message);e.status=r.status;e.details=data||text.slice(0,500);throw e;}
+  return data;
 }
 
-async function browserFetch(slug){
-  const browser=await getBrowser();
-  const page=await browser.newPage();
-  await page.setViewport({width:1280,height:800});
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
-  const diagnostics=[];
+function parseIdentifier(value){
+  const raw=cleanInput(value);
   try{
-    const nav=await page.goto(`https://kick.com/${encodeURIComponent(slug)}`,{waitUntil:'domcontentloaded',timeout:30000});
-    diagnostics.push({transport:'browser-navigation',endpoint:`https://kick.com/${slug}`,status:nav?.status()||0,ok:!!nav&&nav.ok()});
-    await new Promise(r=>setTimeout(r,2500));
-
-    const result=await page.evaluate(async (slug)=>{
-      const urls=[
-        `/api/v2/channels/${encodeURIComponent(slug)}`,
-        `/api/v1/channels/${encodeURIComponent(slug)}`,
-        `/api/v2/channels/${encodeURIComponent(slug)}/livestream`,
-        `/api/v1/channels/${encodeURIComponent(slug)}/livestream`,
-        `/api/v2/channels/${encodeURIComponent(slug)}/chatroom`
-      ];
-      const responses=[];
-      for(const url of urls){
-        try{
-          const r=await fetch(url,{credentials:'include',headers:{'Accept':'application/json, text/plain, */*'}});
-          const text=await r.text();
-          let data=null; try{data=JSON.parse(text);}catch{}
-          responses.push({url,status:r.status,ok:r.ok,data,bodyPreview:data?undefined:text.slice(0,500)});
-        }catch(e){responses.push({url,status:0,ok:false,error:String(e)});}
-      }
-      const meta={
-        title:document.title,
-        ogTitle:document.querySelector('meta[property="og:title"]')?.content||null,
-        ogImage:document.querySelector('meta[property="og:image"]')?.content||null,
-        description:document.querySelector('meta[name="description"]')?.content||document.querySelector('meta[property="og:description"]')?.content||null
-      };
-      return {responses,meta};
-    },slug);
-
-    let merged={slug,username:slug,displayName:slug,url:`https://kick.com/${slug}`};
-    const raw=[];
-    for(const r of result.responses){
-      diagnostics.push({transport:'browser-fetch',endpoint:`https://kick.com${r.url}`,status:r.status,ok:r.ok,bodyPreview:r.bodyPreview,error:r.error});
-      if(r.ok&&r.data&&typeof r.data==='object'){
-        raw.push({endpoint:`https://kick.com${r.url}`,data:r.data});
-        merged=merge(merged,normalize(r.data,slug));
-      }
+    const u=new URL(raw.match(/^https?:\/\//i)?raw:`https://${raw}`);
+    if(/(^|\.)youtube\.com$/i.test(u.hostname)||/(^|\.)youtu\.be$/i.test(u.hostname)){
+      const parts=u.pathname.split('/').filter(Boolean);
+      if(parts[0]==='channel'&&parts[1]) return {type:'id',value:parts[1]};
+      if(parts[0]?.startsWith('@')) return {type:'handle',value:parts[0]};
+      if(parts[0]==='user'&&parts[1]) return {type:'username',value:parts[1]};
+      if(parts[0]==='c'&&parts[1]) return {type:'query',value:parts[1]};
     }
-    if(!merged.profilePicture&&result.meta.ogImage) merged.profilePicture=result.meta.ogImage;
-    if(!merged.thumbnail&&result.meta.ogImage) merged.thumbnail=result.meta.ogImage;
-    if(!merged.bio&&result.meta.description) merged.bio=result.meta.description;
-    return {channel:merged,raw,diagnostics,meta:result.meta};
-  } finally { await page.close().catch(()=>{}); }
+  }catch{}
+  if(/^UC[A-Za-z0-9_-]{20,}$/.test(raw)) return {type:'id',value:raw};
+  if(raw.startsWith('@')) return {type:'handle',value:raw};
+  return {type:'handle-or-query',value:raw};
+}
+
+async function getChannelBy(filterKey,filterValue){
+  const data=await yt('channels',{part:'snippet,statistics,brandingSettings,status', [filterKey]:filterValue, maxResults:1});
+  return data.items?.[0]||null;
+}
+
+async function resolveChannel(input){
+  const id=parseIdentifier(input);
+  if(id.type==='id') return getChannelBy('id',id.value);
+  if(id.type==='username') return getChannelBy('forUsername',id.value);
+  if(id.type==='handle') return getChannelBy('forHandle',id.value);
+  if(id.type==='handle-or-query'){
+    const direct=await getChannelBy('forHandle',id.value).catch(()=>null);
+    if(direct) return direct;
+  }
+  const q=id.value;
+  const search=await yt('search',{part:'snippet',type:'channel',q,maxResults:1});
+  const channelId=search.items?.[0]?.snippet?.channelId||search.items?.[0]?.id?.channelId;
+  if(!channelId) return null;
+  return getChannelBy('id',channelId);
+}
+
+async function getLiveVideo(channelId){
+  const search=await yt('search',{part:'snippet',channelId,eventType:'live',type:'video',maxResults:5,order:'date'});
+  const videoId=search.items?.[0]?.id?.videoId;
+  if(!videoId) return null;
+  const videos=await yt('videos',{part:'snippet,liveStreamingDetails,statistics,status',id:videoId});
+  return videos.items?.[0]||null;
+}
+
+async function getCategory(categoryId){
+  if(!categoryId) return null;
+  const data=await yt('videoCategories',{part:'snippet',id:categoryId});
+  return data.items?.[0]?.snippet?.title||null;
+}
+
+function normalizeChannel(channel,live,category){
+  const s=channel.snippet||{};
+  const stats=channel.statistics||{};
+  const branding=channel.brandingSettings?.channel||{};
+  const ls=live?.snippet||{};
+  const ld=live?.liveStreamingDetails||{};
+  const vs=live?.statistics||{};
+  const custom=first(s.customUrl,branding.unsubscribedTrailer);
+  const handle=s.customUrl||null;
+  return {
+    platform:'YouTube',
+    channelId:channel.id,
+    username:first(handle,s.title,channel.id),
+    displayName:s.title||channel.id,
+    customUrl:s.customUrl||null,
+    profilePicture:bestThumb(s.thumbnails),
+    bio:s.description||null,
+    country:first(s.country,branding.country)||null,
+    createdAt:s.publishedAt||null,
+    subscribers:stats.hiddenSubscriberCount?null:stats.subscriberCount??null,
+    hiddenSubscribers:Boolean(stats.hiddenSubscriberCount),
+    totalViews:stats.viewCount??null,
+    videoCount:stats.videoCount??null,
+    isLive:Boolean(live),
+    viewers:ld.concurrentViewers??null,
+    title:ls.title||null,
+    category:category||null,
+    categoryId:ls.categoryId||null,
+    language:first(ls.defaultAudioLanguage,ls.defaultLanguage,s.defaultLanguage)||null,
+    startedAt:first(ld.actualStartTime,ld.scheduledStartTime)||null,
+    scheduledStartAt:ld.scheduledStartTime||null,
+    streamId:live?.id||null,
+    thumbnail:bestThumb(ls.thumbnails),
+    liveLikes:vs.likeCount??null,
+    liveComments:vs.commentCount??null,
+    privacyStatus:channel.status?.privacyStatus||null,
+    madeForKids:first(channel.status?.madeForKids,channel.status?.selfDeclaredMadeForKids),
+    url:`https://www.youtube.com/channel/${channel.id}`,
+    liveUrl:live?.id?`https://www.youtube.com/watch?v=${live.id}`:null
+  };
 }
 
 async function handleApi(req,res,url){
-  if(req.method!=='GET')return sendJson(res,405,{error:'Method not allowed'});
-  const slug=cleanSlug(url.searchParams.get('slug'));
-  if(!slug||!/^[a-z0-9_.-]{1,80}$/i.test(slug))return sendJson(res,400,{error:'Enter a valid Kick username or channel URL.'});
+  if(req.method!=='GET') return sendJson(res,405,{error:'Method not allowed'});
+  if(!YOUTUBE_API_KEY) return sendJson(res,503,{ok:false,error:'BiisViews needs a YouTube Data API key. Set YOUTUBE_API_KEY in Render.'});
+  const query=cleanInput(url.searchParams.get('channel')||url.searchParams.get('slug'));
+  if(!query) return sendJson(res,400,{error:'Enter a YouTube channel name, @handle, channel ID or URL.'});
   try{
-    const result=await browserFetch(slug);
-    return sendJson(res,200,{ok:true,source:'kick-browser-session',transport:'puppeteer',fetchedAt:new Date().toISOString(),channel:result.channel,raw:result.raw,diagnostics:result.diagnostics,meta:result.meta});
-  }catch(error){return sendJson(res,502,{ok:false,error:`Browser fetch failed: ${error.message}`,diagnostics:[{transport:'puppeteer',error:error.stack||error.message}]});}
+    const channel=await resolveChannel(query);
+    if(!channel) return sendJson(res,404,{ok:false,error:'YouTube channel not found.'});
+    const live=await getLiveVideo(channel.id);
+    const category=live?await getCategory(live.snippet?.categoryId).catch(()=>null):null;
+    const normalized=normalizeChannel(channel,live,category);
+    return sendJson(res,200,{ok:true,source:'youtube-data-api-v3',fetchedAt:new Date().toISOString(),channel:normalized,raw:{channel,liveVideo:live}});
+  }catch(error){
+    return sendJson(res,error.status&&error.status>=400&&error.status<600?error.status:502,{ok:false,error:error.message||'Unable to fetch YouTube channel.',details:error.details});
+  }
 }
 
 function serveStatic(res,pathname){let relative=pathname==='/'?'/index.html':pathname;let filePath=path.normalize(path.join(PUBLIC_DIR,relative));if(!filePath.startsWith(PUBLIC_DIR)){res.writeHead(403);return res.end('Forbidden');}fs.stat(filePath,(err,stat)=>{if(err||!stat.isFile())filePath=path.join(PUBLIC_DIR,'index.html');fs.readFile(filePath,(readErr,content)=>{if(readErr){res.writeHead(404);return res.end('Not found');}res.writeHead(200,{'Content-Type':MIME[path.extname(filePath)]||'application/octet-stream','Cache-Control':path.basename(filePath)==='index.html'?'no-cache':'public, max-age=3600'});res.end(content);});});}
 
 const server=http.createServer(async(req,res)=>{const url=new URL(req.url,`http://${req.headers.host||'localhost'}`);if(url.pathname==='/api/channel')return handleApi(req,res,url);serveStatic(res,decodeURIComponent(url.pathname));});
-server.listen(PORT,'0.0.0.0',()=>console.log(`BiisViews browser-backed server running on http://localhost:${PORT}`));
+server.listen(PORT,'0.0.0.0',()=>console.log(`BiisViews YouTube server running on http://localhost:${PORT}`));
