@@ -12,14 +12,10 @@
     <section class="hero">
       <span class="eyebrow">BIISVIEWS</span>
       <h1>Kick channel info, fast.</h1>
-      <p>Enter a Kick username or channel URL to fetch public channel details without needing your own official Kick developer key.</p>
-
+      <p>Search a Kick username to see the public channel profile and live-stream information BiisViews can retrieve.</p>
       <form id="lookupForm" class="lookup" autocomplete="off">
         <label class="sr-only" for="channelInput">Kick username</label>
-        <div class="input-wrap">
-          <span class="prefix">kick.com/</span>
-          <input id="channelInput" name="channel" placeholder="yhimbrad" inputmode="text" autocapitalize="none" spellcheck="false" required />
-        </div>
+        <div class="input-wrap"><span class="prefix">kick.com/</span><input id="channelInput" name="channel" placeholder="yhimbrad" inputmode="text" autocapitalize="none" spellcheck="false" required /></div>
         <button id="lookupButton" type="submit">Search channel</button>
       </form>
       <div id="status" class="status" aria-live="polite"></div>
@@ -27,19 +23,13 @@
 
     <section id="result" class="result hidden" aria-live="polite">
       <article class="channel-card">
-        <div id="cover" class="cover">
-          <div class="cover-fade"></div>
-          <span id="liveBadge" class="live-badge hidden">LIVE</span>
-        </div>
-
+        <div id="cover" class="cover"><div class="cover-fade"></div><span id="liveBadge" class="live-badge hidden">LIVE</span></div>
         <div class="channel-body">
           <div class="identity">
             <img id="avatar" class="avatar" alt="Channel avatar" />
             <div class="identity-text">
-              <div class="name-line">
-                <h2 id="username"></h2>
-                <span id="verified" class="verified hidden" title="Verified">✓</span>
-              </div>
+              <div class="name-line"><h2 id="username"></h2><span id="verified" class="verified hidden" title="Verified">✓</span></div>
+              <div id="displayName" class="display-name"></div>
               <a id="channelLink" target="_blank" rel="noreferrer"></a>
             </div>
           </div>
@@ -52,25 +42,30 @@
             <div class="stat"><span>VIEWERS</span><strong id="viewers">—</strong></div>
             <div class="stat"><span>FOLLOWERS</span><strong id="followers">—</strong></div>
             <div class="stat"><span>CATEGORY</span><strong id="category">—</strong></div>
+            <div class="stat"><span>FOLLOWING</span><strong id="following">—</strong></div>
+            <div class="stat"><span>SUBSCRIBERS</span><strong id="subscriptions">—</strong></div>
+            <div class="stat"><span>LANGUAGE</span><strong id="language">—</strong></div>
+            <div class="stat"><span>VODS</span><strong id="vodEnabled">—</strong></div>
           </div>
 
-          <div class="meta">
-            <span id="channelId"></span>
-            <span id="chatroomId"></span>
-            <span id="startedAt"></span>
+          <div class="info-grid">
+            <div><span>Channel ID</span><strong id="channelId">—</strong></div>
+            <div><span>User ID</span><strong id="userId">—</strong></div>
+            <div><span>Chatroom ID</span><strong id="chatroomId">—</strong></div>
+            <div><span>Stream ID</span><strong id="streamId">—</strong></div>
+            <div><span>Category ID</span><strong id="categoryId">—</strong></div>
+            <div><span>Subscriptions</span><strong id="subscriptionEnabled">—</strong></div>
+            <div><span>Stream started</span><strong id="startedAt">—</strong></div>
+            <div><span>Channel created</span><strong id="createdAt">—</strong></div>
           </div>
         </div>
       </article>
 
-      <details class="raw-panel">
-        <summary>Raw Kick response</summary>
-        <pre id="rawJson"></pre>
-      </details>
+      <details class="raw-panel"><summary>Raw Kick response</summary><pre id="rawJson"></pre></details>
+      <details class="raw-panel"><summary>Endpoint diagnostics</summary><pre id="diagnosticsJson"></pre></details>
     </section>
 
-    <footer>
-      BiisViews uses undocumented public Kick website endpoints and may need updating if Kick changes them.
-    </footer>
+    <footer>BiisViews shows public data returned by the tested Kick endpoints. Some fields may be unavailable depending on the endpoint response.</footer>
   </main>
   <script src="/app.js" defer></script>
 </body>
