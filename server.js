@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const { execFile } = require('child_process');
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -92,6 +93,53 @@ function normalizeChannel(raw, requestedSlug) {
   };
 }
 
+function curlRequest(endpoint, slug) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-sS', '-L', '--compressed',
+      '--max-time', '12',
+      '-H', 'Accept: application/json, text/plain, */*',
+      '-H', 'Accept-Language: en-GB,en;q=0.9',
+      '-H', `Referer: https://kick.com/${encodeURIComponent(slug)}`,
+      '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      '-w', '\n__BIISVIEWS_STATUS__:%{http_code}',
+      endpoint
+    ];
+
+    execFile('curl', args, { timeout: 15000, maxBuffer: 5 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error && !stdout) {
+        const e = new Error(`Curl request failed: ${stderr || error.message}`);
+        e.status = 502;
+        return reject(e);
+      }
+
+      const marker = '\n__BIISVIEWS_STATUS__:';
+      const idx = stdout.lastIndexOf(marker);
+      const body = idx >= 0 ? stdout.slice(0, idx) : stdout;
+      const httpStatus = idx >= 0 ? Number(stdout.slice(idx + marker.length).trim()) : 0;
+
+      let data;
+      try { data = JSON.parse(body); } catch { data = null; }
+
+      if (httpStatus < 200 || httpStatus >= 300) {
+        const e = new Error(`Kick returned HTTP ${httpStatus || 'unknown'}`);
+        e.status = httpStatus === 404 ? 404 : 502;
+        e.details = data || body.slice(0, 500);
+        return reject(e);
+      }
+
+      if (!data || typeof data !== 'object') {
+        const e = new Error('Kick did not return JSON.');
+        e.status = 502;
+        e.details = body.slice(0, 500);
+        return reject(e);
+      }
+
+      resolve(data);
+    });
+  });
+}
+
 async function fetchKickChannel(slug) {
   const endpoints = [
     `https://kick.com/api/v2/channels/${encodeURIComponent(slug)}`,
@@ -101,33 +149,8 @@ async function fetchKickChannel(slug) {
   let lastError;
   for (const endpoint of endpoints) {
     try {
-      const response = await fetch(endpoint, {
-        headers: {
-          'Accept': 'application/json, text/plain, */*',
-          'Accept-Language': 'en-GB,en;q=0.9',
-          'Referer': `https://kick.com/${encodeURIComponent(slug)}`,
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36'
-        },
-        redirect: 'follow',
-        signal: AbortSignal.timeout(10000)
-      });
-
-      const text = await response.text();
-      let data;
-      try { data = JSON.parse(text); } catch { data = null; }
-
-      if (!response.ok) {
-        const error = new Error(`Kick returned HTTP ${response.status}`);
-        error.status = response.status === 404 ? 404 : 502;
-        error.details = data || text.slice(0, 300);
-        throw error;
-      }
-
-      if (!data || typeof data !== 'object') {
-        throw Object.assign(new Error('Kick did not return JSON.'), { status: 502 });
-      }
-
-      return { data, endpoint };
+      const data = await curlRequest(endpoint, slug);
+      return { data, endpoint, transport: 'curl' };
     } catch (error) {
       lastError = error;
     }
@@ -144,11 +167,12 @@ async function handleApi(req, res, url) {
   }
 
   try {
-    const { data, endpoint } = await fetchKickChannel(slug);
+    const { data, endpoint, transport } = await fetchKickChannel(slug);
     return sendJson(res, 200, {
       ok: true,
       source: 'unofficial-kick-website-endpoint',
       endpoint,
+      transport,
       fetchedAt: new Date().toISOString(),
       channel: normalizeChannel(data, slug),
       raw: data
