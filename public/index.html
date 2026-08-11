@@ -12,10 +12,10 @@
     <section class="hero">
       <span class="eyebrow">BIISVIEWS · YOUTUBE</span>
       <h1>Full YouTube channel stats.</h1>
-      <p>Search a channel, @handle, channel ID or URL to see the public stats BiisViews can retrieve without your own API key.</p>
+      <p>Search any channel name, @handle, channel ID or URL to see the public stats BiisViews can retrieve without your own API key.</p>
       <form id="lookupForm" class="lookup" autocomplete="off">
         <label class="sr-only" for="channelInput">YouTube channel</label>
-        <div class="input-wrap"><span class="prefix">youtube.com/</span><input id="channelInput" name="channel" placeholder="@TYRIQUEHYDE" inputmode="text" autocapitalize="none" spellcheck="false" required /></div>
+        <div class="input-wrap"><span class="prefix">youtube.com/</span><input id="channelInput" name="channel" placeholder="@channel" inputmode="text" autocapitalize="none" spellcheck="false" required /></div>
         <button id="lookupButton" type="submit">Search channel</button>
       </form>
       <div id="status" class="status" aria-live="polite"></div>
@@ -33,10 +33,8 @@
               <a id="channelLink" target="_blank" rel="noreferrer"></a>
             </div>
           </div>
-
           <p id="bio" class="bio"></p>
           <h3 id="streamTitle" class="stream-title"></h3>
-
           <div class="stats">
             <div class="stat"><span>STATUS</span><strong id="liveStatus">—</strong></div>
             <div class="stat"><span>LIVE VIEWERS</span><strong id="viewers">—</strong></div>
@@ -51,7 +49,6 @@
             <div class="stat"><span>TOP RECENT VIDEO</span><strong id="topRecentViews">—</strong></div>
             <div class="stat"><span>PRIVACY</span><strong id="privacyStatus">—</strong></div>
           </div>
-
           <div class="info-grid">
             <div><span>Channel ID</span><strong id="channelId">—</strong></div>
             <div><span>Handle / custom URL</span><strong id="customUrl">—</strong></div>
@@ -60,20 +57,17 @@
             <div><span>Language</span><strong id="language">—</strong></div>
             <div><span>Stream started</span><strong id="startedAt">—</strong></div>
             <div><span>Channel joined</span><strong id="createdAt">—</strong></div>
-            <div><span>Public data source</span><strong>youtube.com pages</strong></div>
+            <div><span>Public data source</span><strong>YouTube.js / Innertube</strong></div>
           </div>
         </div>
       </article>
-
       <section class="videos-section">
         <div class="section-head"><div><span class="eyebrow mini">RECENT CONTENT</span><h3>Latest videos</h3></div><span id="recentSummary" class="muted"></span></div>
         <div id="recentVideos" class="video-grid"></div>
       </section>
-
       <details class="raw-panel"><summary>Public-data diagnostics</summary><pre id="rawJson"></pre></details>
     </section>
-
-    <footer>BiisViews reads public YouTube pages directly. Stats can be rounded, hidden by creators, or unavailable when YouTube does not expose them publicly.</footer>
+    <footer>BiisViews uses YouTube.js / Innertube to read public YouTube data without your own Data API key. Stats can still be rounded, hidden by creators, or unavailable when YouTube does not expose them publicly.</footer>
   </main>
   <script src="/app.js" defer></script>
 </body>
