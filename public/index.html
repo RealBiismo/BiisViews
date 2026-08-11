@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0b0d" />
+  <title>BiisViews</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <span class="eyebrow">BIISVIEWS</span>
+      <h1>Kick channel info, fast.</h1>
+      <p>Enter a Kick username or channel URL to fetch public channel details without needing your own official Kick developer key.</p>
+
+      <form id="lookupForm" class="lookup" autocomplete="off">
+        <label class="sr-only" for="channelInput">Kick username</label>
+        <div class="input-wrap">
+          <span class="prefix">kick.com/</span>
+          <input id="channelInput" name="channel" placeholder="yhimbrad" inputmode="text" autocapitalize="none" spellcheck="false" required />
+        </div>
+        <button id="lookupButton" type="submit">Search channel</button>
+      </form>
+      <div id="status" class="status" aria-live="polite"></div>
+    </section>
+
+    <section id="result" class="result hidden" aria-live="polite">
+      <article class="channel-card">
+        <div id="cover" class="cover">
+          <div class="cover-fade"></div>
+          <span id="liveBadge" class="live-badge hidden">LIVE</span>
+        </div>
+
+        <div class="channel-body">
+          <div class="identity">
+            <img id="avatar" class="avatar" alt="Channel avatar" />
+            <div class="identity-text">
+              <div class="name-line">
+                <h2 id="username"></h2>
+                <span id="verified" class="verified hidden" title="Verified">✓</span>
+              </div>
+              <a id="channelLink" target="_blank" rel="noreferrer"></a>
+            </div>
+          </div>
+
+          <p id="bio" class="bio"></p>
+          <h3 id="streamTitle" class="stream-title"></h3>
+
+          <div class="stats">
+            <div class="stat"><span>STATUS</span><strong id="liveStatus">—</strong></div>
+            <div class="stat"><span>VIEWERS</span><strong id="viewers">—</strong></div>
+            <div class="stat"><span>FOLLOWERS</span><strong id="followers">—</strong></div>
+            <div class="stat"><span>CATEGORY</span><strong id="category">—</strong></div>
+          </div>
+
+          <div class="meta">
+            <span id="channelId"></span>
+            <span id="chatroomId"></span>
+            <span id="startedAt"></span>
+          </div>
+        </div>
+      </article>
+
+      <details class="raw-panel">
+        <summary>Raw Kick response</summary>
+        <pre id="rawJson"></pre>
+      </details>
+    </section>
+
+    <footer>
+      BiisViews uses undocumented public Kick website endpoints and may need updating if Kick changes them.
+    </footer>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
