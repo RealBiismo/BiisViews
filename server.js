@@ -11,7 +11,7 @@ const MIME = { '.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-
 function sendJson(res,status,payload){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(payload));}
 function cleanSlug(value){return String(value||'').trim().replace(/^https?:\/\/(www\.)?kick\.com\//i,'').split(/[/?#]/)[0].replace(/^@/,'').toLowerCase();}
 function first(...values){return values.find(v=>v!==undefined&&v!==null&&v!=='');}
-function unwrap(raw){return raw?.data?.channel || raw?.data || raw?.channel || raw;}
+function unwrap(raw){return raw?.data?.channel || raw?.data?.livestream || raw?.data?.stream || raw?.data || raw?.channel || raw?.livestream || raw?.stream || raw;}
 
 function normalizeChannel(input,requestedSlug){
   const raw=unwrap(input)||{};
@@ -45,17 +45,43 @@ function normalizeChannel(input,requestedSlug){
     vodEnabled:Boolean(first(raw?.vod_enabled,raw?.videos_enabled,false)),
     isLive,
     viewers:viewerCount??null,
-    title:first(livestream?.session_title,livestream?.title,raw?.stream_title,raw?.title)||null,
-    category:first(categoryObj?.name,categoryObj?.title)||null,
-    categoryId:first(categoryObj?.id,livestream?.category_id,raw?.category_id)||null,
+    title:first(livestream?.session_title,livestream?.title,raw?.session_title,raw?.stream_title,raw?.title)||null,
+    category:first(categoryObj?.name,categoryObj?.title,raw?.category?.name,raw?.category?.title)||null,
+    categoryId:first(categoryObj?.id,livestream?.category_id,raw?.category_id,raw?.category?.id)||null,
     language:first(livestream?.language,raw?.language,user?.language)||null,
-    startedAt:first(livestream?.created_at,livestream?.started_at,livestream?.start_time)||null,
-    streamId:first(livestream?.id,raw?.livestream_id)||null,
+    startedAt:first(livestream?.created_at,livestream?.started_at,livestream?.start_time,raw?.created_at,raw?.started_at,raw?.start_time)||null,
+    streamId:first(livestream?.id,raw?.livestream_id,raw?.id)||null,
     thumbnail:thumbnail||null,
     playbackUrl:first(raw?.playback_url,livestream?.playback_url)||null,
     createdAt:first(raw?.created_at,user?.created_at)||null,
     updatedAt:first(raw?.updated_at,user?.updated_at)||null,
     url:`https://kick.com/${first(raw?.slug,user?.slug,requestedSlug)}`
+  };
+}
+
+function normalizeLivestream(input,requestedSlug){
+  const raw=unwrap(input);
+  if(!raw || typeof raw!=='object' || Array.isArray(raw)) return null;
+  const categoryObj=first(raw?.categories?.[0],raw?.category)||{};
+  const hasLiveShape=first(raw?.id,raw?.livestream_id,raw?.viewer_count,raw?.viewers,raw?.session_title,raw?.started_at,raw?.created_at) !== undefined;
+  if(!hasLiveShape) return null;
+  const explicit=first(raw?.is_live,raw?.live);
+  return {
+    slug:requestedSlug,
+    username:requestedSlug,
+    displayName:requestedSlug,
+    isLive: explicit !== undefined ? Boolean(explicit) : true,
+    viewers:first(raw?.viewer_count,raw?.viewers)??null,
+    title:first(raw?.session_title,raw?.title)??null,
+    category:first(categoryObj?.name,categoryObj?.title)??null,
+    categoryId:first(categoryObj?.id,raw?.category_id)??null,
+    language:first(raw?.language)??null,
+    startedAt:first(raw?.created_at,raw?.started_at,raw?.start_time)??null,
+    streamId:first(raw?.id,raw?.livestream_id)??null,
+    channelId:first(raw?.channel_id)??null,
+    thumbnail:first(raw?.thumbnail?.url,raw?.thumbnail)??null,
+    playbackUrl:first(raw?.playback_url)??null,
+    url:`https://kick.com/${requestedSlug}`
   };
 }
 
@@ -71,28 +97,45 @@ function mergeChannel(base,next){
 
 function scoreChannel(c){
   const keys=['profilePicture','banner','bio','channelId','userId','chatroomId','followers','following','subscriptions','viewers','title','category','categoryId','language','startedAt','streamId','createdAt'];
-  return keys.reduce((n,k)=>n+(c?.[k]!==undefined&&c?.[k]!==null&&c?.[k]!==''?1:0),0)+(c?.isLive?2:0);
+  return keys.reduce((n,k)=>n+(c?.[k]!==undefined&&c?.[k]!==null&&c?.[k]!==''?1:0),0)+(c?.isLive?3:0);
 }
 
 function curlProbe(endpoint,slug){return new Promise(resolve=>{const args=['-sS','-L','--compressed','--max-time','12','-H','Accept: application/json, text/plain, */*','-H','Accept-Language: en-GB,en;q=0.9','-H',`Referer: https://kick.com/${encodeURIComponent(slug)}`,'-H','Origin: https://kick.com','-H','User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36','-w','\n__BIISVIEWS_STATUS__:%{http_code}',endpoint];execFile('curl',args,{timeout:15000,maxBuffer:5*1024*1024},(error,stdout='',stderr='')=>{const marker='\n__BIISVIEWS_STATUS__:';const idx=stdout.lastIndexOf(marker);const body=idx>=0?stdout.slice(0,idx):stdout;const status=idx>=0?Number(stdout.slice(idx+marker.length).trim()):0;let json=null;try{json=JSON.parse(body);}catch{}resolve({endpoint,status,ok:status>=200&&status<300,json,bodyPreview:json?undefined:body.slice(0,700),transport:'curl',transportError:error&&!stdout?(stderr||error.message):undefined});});});}
 
 async function probeAll(slug){
-  const slugEndpoints=[
+  const channelEndpoints=[
     `https://api.kick.com/private/v1/channels/${encodeURIComponent(slug)}`,
     `https://kick.com/api/v2/channels/${encodeURIComponent(slug)}`,
     `https://kick.com/api/v1/channels/${encodeURIComponent(slug)}`
+  ];
+  const livestreamEndpoints=[
+    `https://kick.com/api/v2/channels/${encodeURIComponent(slug)}/livestream`,
+    `https://kick.com/api/v1/channels/${encodeURIComponent(slug)}/livestream`,
+    `https://kick.com/api/v1/live-channels/${encodeURIComponent(slug)}/search`
   ];
   const diagnostics=[];
   const successful=[];
   let merged=null;
 
-  for(const endpoint of slugEndpoints){
+  for(const endpoint of channelEndpoints){
     const probe=await curlProbe(endpoint,slug);
     diagnostics.push(probe);
     if(probe.ok&&probe.json&&typeof probe.json==='object'){
       const normalized=normalizeChannel(probe.json,slug);
-      successful.push({endpoint,raw:probe.json,channel:normalized,score:scoreChannel(normalized)});
+      successful.push({endpoint,raw:probe.json,channel:normalized,score:scoreChannel(normalized),type:'channel'});
       merged=mergeChannel(merged||{},normalized);
+    }
+  }
+
+  for(const endpoint of livestreamEndpoints){
+    const probe=await curlProbe(endpoint,slug);
+    diagnostics.push(probe);
+    if(probe.ok&&probe.json&&typeof probe.json==='object'){
+      const normalized=normalizeLivestream(probe.json,slug);
+      if(normalized){
+        successful.push({endpoint,raw:probe.json,channel:normalized,score:scoreChannel(normalized)+5,type:'livestream'});
+        merged=mergeChannel(merged||{},normalized);
+      }
     }
   }
 
@@ -113,6 +156,7 @@ async function probeAll(slug){
           merged.viewers=first(d?.viewer_count,d?.count,d?.viewers,merged.viewers);
           const explicitLive=first(d?.is_live,d?.live);
           if(explicitLive!==undefined) merged.isLive=Boolean(explicitLive);
+          else if(Number(merged.viewers)>0) merged.isLive=true;
         }
       }
     }
@@ -120,7 +164,7 @@ async function probeAll(slug){
 
   successful.sort((a,b)=>b.score-a.score);
   const richest=successful[0];
-  return {ok:true,channel:merged,rawResponses:successful.map(x=>({endpoint:x.endpoint,data:x.raw})),endpoint:richest?.endpoint||successful[0]?.endpoint,diagnostics};
+  return {ok:true,channel:merged,rawResponses:successful.map(x=>({type:x.type,endpoint:x.endpoint,data:x.raw})),endpoint:richest?.endpoint||successful[0]?.endpoint,diagnostics};
 }
 
 async function handleApi(req,res,url){
@@ -128,7 +172,7 @@ async function handleApi(req,res,url){
   const slug=cleanSlug(url.searchParams.get('slug'));
   if(!slug||!/^[a-z0-9_.-]{1,80}$/i.test(slug))return sendJson(res,400,{error:'Enter a valid Kick username or channel URL.'});
   const result=await probeAll(slug);
-  if(result.ok)return sendJson(res,200,{ok:true,source:'kick-endpoint-merge',endpoint:result.endpoint,transport:'curl',fetchedAt:new Date().toISOString(),channel:result.channel,raw:result.rawResponses,diagnostics:result.diagnostics});
+  if(result.ok)return sendJson(res,200,{ok:true,source:'kick-channel-plus-livestream-probe',endpoint:result.endpoint,transport:'curl',fetchedAt:new Date().toISOString(),channel:result.channel,raw:result.rawResponses,diagnostics:result.diagnostics});
   return sendJson(res,502,{ok:false,error:'No tested Kick endpoint returned usable channel JSON.',diagnostics:result.diagnostics});
 }
 
